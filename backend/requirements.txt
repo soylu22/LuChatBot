@@ -1,0 +1,10 @@
+django
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+psycopg2-binary
+pgvector
+langchain
+google-generativeai
+python-jose[cryptography]
+passlib[bcrypt]
