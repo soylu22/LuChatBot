@@ -9,3 +9,4 @@ langchain-text-splitters
 google-generativeai
 python-jose[cryptography]
 passlib[bcrypt]
+python-dotenv
