@@ -1,12 +1,15 @@
 import os
-import psycopg2
-from django.db import connection
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from django.contrib.auth.models import User
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 import google.generativeai as genai
 from typing import List, Dict
+from .models import KnowledgeBase
+from pgvector.django import L2Distance
 
 # Configure Gemini
-GEMINI_API_KEY = os.environ.get("GOOGLE_API_KEY", "YOUR_API_KEY_HERE")
+GEMINI_API_KEY = os.environ.get("GOOGLE_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GOOGLE_API_KEY not found! Check your .env file.")
 genai.configure(api_key=GEMINI_API_KEY)
 
 class RAGService:
@@ -16,8 +19,8 @@ class RAGService:
             chunk_overlap=80,
             length_function=len
         )
-        self.embedding_model = "models/text-embedding-004"
-        self.llm_model = genai.GenerativeModel("gemini-1.5-flash")
+        self.embedding_model = "models/gemini-embedding-001"
+        self.llm_model = genai.GenerativeModel("models/gemini-2.5-flash")
 
     def ingest_text(self, text: str, metadata: dict = None):
         chunks = self.text_splitter.split_text(text)
@@ -28,14 +31,17 @@ class RAGService:
         )
         embeddings = embeddings_result['embedding']
         
-        with connection.cursor() as cursor:
-            for content, embedding in zip(chunks, embeddings):
-                # Using raw SQL because pgvector isn't easily handled by default Django ORM 
-                # without extra packages like django-pgvector
-                cursor.execute(
-                    "INSERT INTO knowledge_base (content, embedding, metadata) VALUES (%s, %s, %s)",
-                    [content, embedding, str(metadata) if metadata else None]
-                )
+        # Create KnowledgeBase objects using Django ORM
+        knowledge_objects = []
+        for content, embedding in zip(chunks, embeddings):
+            knowledge_objects.append(KnowledgeBase(
+                content=content,
+                embedding=embedding,
+                metadata=metadata
+            ))
+        
+        # Bulk create for better performance
+        KnowledgeBase.objects.bulk_create(knowledge_objects)
 
     def get_response(self, question: str) -> str:
         # 1. Get embedding for the query
@@ -46,14 +52,12 @@ class RAGService:
         )
         query_embedding = query_embedding_result['embedding']
 
-        # 2. Retrieve Top 3 from Postgres
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT content FROM knowledge_base ORDER BY embedding <=> %s::vector LIMIT 3",
-                [query_embedding]
-            )
-            rows = cursor.fetchall()
-            context = [row[0] for row in rows]
+        # 2. Retrieve Top 3 using Django ORM with pgvector
+        similar_docs = KnowledgeBase.objects.order_by(
+            L2Distance('embedding', query_embedding)
+        )[:3]
+        
+        context = [doc.content for doc in similar_docs]
 
         if not context:
             return "No relevant information found."

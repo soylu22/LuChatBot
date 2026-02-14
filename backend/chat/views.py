@@ -3,8 +3,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.models import User
-from django.db import connection
 from .utils import RAGService
+from .models import ChatHistory
 
 class SignupView(APIView):
     permission_classes = [AllowAny]
@@ -26,12 +26,12 @@ class ChatView(APIView):
         rag = RAGService()
         answer = rag.get_response(question)
         
-        # Save History
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO chat_history (user_email, question, answer) VALUES (%s, %s, %s)",
-                [request.user.email, question, answer]
-            )
+        # Save History using Django ORM
+        ChatHistory.objects.create(
+            user=request.user,
+            question=question,
+            answer=answer
+        )
             
         return Response({"response": answer})
 
@@ -46,11 +46,8 @@ class IngestView(APIView):
 class HistoryView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT question, answer, created_at FROM chat_history WHERE user_email = %s ORDER BY created_at ASC",
-                [request.user.email]
-            )
-            columns = [col[0] for col in cursor.description]
-            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            return Response(results)
+        # Get chat history using Django ORM
+        history = ChatHistory.objects.filter(user=request.user).values(
+            'question', 'answer', 'created_at'
+        )
+        return Response(list(history))
